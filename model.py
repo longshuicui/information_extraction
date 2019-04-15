@@ -10,6 +10,7 @@ class Model(object):
 
     def run(self):
         is_train=tf.placeholder(tf.bool)
+        token=tf.placeholder(tf.string,shape=[None],name="input_token")
         token_ids=tf.placeholder(tf.int32,shape=[None,None],name="input_token_ids")
         ner_ids=tf.placeholder(tf.int32,shape=[None,None],name="ner_task_ids")
         scoreMatrix=tf.placeholder(tf.float32,shape=[None,None,None],name="score_head")
@@ -24,6 +25,10 @@ class Model(object):
         embedding_matrix=tf.get_variable(name="embedding",shape=self.embed_matrix.shape,
                                          initializer=tf.constant_initializer(self.embed_matrix))
         input_rnn=tf.nn.embedding_lookup(embedding_matrix,token_ids)
+        #mask操作
+        mask=tf.sequence_mask(seq_len,maxlen=self.config.max_seq_len,dtype=tf.float32,name="mask")
+        mask=tf.expand_dims(mask,-1)
+        input_rnn=input_rnn*mask
 
         lossNER,lossRel,predNER,predRel,relScore=self._compute_loss(input_rnn,
                                                                     seq_len=seq_len,
@@ -34,7 +39,7 @@ class Model(object):
                                                                     dropout_lstm_keep=dropout_lstm_keep,
                                                                     dropout_lstm_output_keep=dropout_lstm_output_keep,
                                                                     dropout_fcl_ner_keep=dropout_fcl_ner_keep,
-                                                                    dropout_fcl_rel_keep=dropout_fcl_rel_keep,)
+                                                                    dropout_fcl_rel_keep=dropout_fcl_rel_keep)
 
         loss_total=lossRel+lossNER  #整体损失
 
@@ -43,6 +48,7 @@ class Model(object):
         #构建一个字典将需要传递数值的参数保存，以便在训练/测试时喂数据
         params={}
         params["is_train"]=is_train
+        params["token"]=token
         params["token_ids"]=token_ids
         params["ner_ids"]=ner_ids
         params["scoreMatrix"]=scoreMatrix
@@ -53,7 +59,7 @@ class Model(object):
         params["dropout_fcl_ner_keep"]=dropout_fcl_ner_keep
         params["dropout_fcl_rel_keep"]=dropout_fcl_rel_keep
 
-        return loss_total,ner_ids,predNER, rel_true,predRel,relScore,params
+        return loss_total,token,ner_ids,predNER, rel_true,predRel,relScore,params
 
     def _compute_loss(self,input_rnn,seq_len,ner_ids,scoreMatrix,is_train,dropout_embedding_keep,dropout_lstm_keep,
                       dropout_lstm_output_keep,dropout_fcl_ner_keep,dropout_fcl_rel_keep,reuse=False):
@@ -78,6 +84,7 @@ class Model(object):
                 input_rnn=tf.concat(outputs,axis=-1)
                 lstm_output=input_rnn
 
+            lstm_output = self._attention(lstm_output)
             if self.config.use_dropout:
                 lstm_output=tf.nn.dropout(lstm_output,keep_prob=dropout_lstm_output_keep)
 
@@ -183,13 +190,25 @@ class Model(object):
 
         return train_op
 
+    def _attention(self,H):
+        """attention"""
+        att_w=tf.get_variable(name="att_w",shape=[self.config.max_seq_len,self.config.max_seq_len],dtype=tf.float32)
+        H=tf.transpose(H,[0,2,1]) #[batch_size,embedding_size,seq_len]
+        weight_att=tf.nn.softmax(att_w)
+        H=tf.einsum("aij,jk->aik",H,weight_att)
+        H=tf.transpose(H,[0,2,1])  #[batch_size,seq_len.embedding_size]
+
+        return H
+
+
 
 class Operations():
     """封装模型中的操作，方便后续调用"""
-    def __init__(self,train_op,loss,params,predNER,actualNER,predRel,actualRel,relScore):
+    def __init__(self,train_op,loss,params,token,predNER,actualNER,predRel,actualRel,relScore):
         self.train_op=train_op
         self.loss=loss
         self.params=params
+        self.token=token
         self.predNER=predNER
         self.actualNER=actualNER
         self.predRel=predRel

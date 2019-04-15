@@ -4,7 +4,6 @@ import time
 import numpy as np
 import pandas as pd
 from sklearn.model_selection import train_test_split
-import eval
 
 def load_dict():
     """加载保存的关系、字符、标签字典"""
@@ -91,11 +90,10 @@ def mapping_label_to_id(example,label2id):
         BIO_ids.append(label2id[label])
     return BIO_ids
 
-def get_scoreMatrix_head(example,relation2id):
+def get_scoreMatrix_head(example,relation2id,max_seq_len=128):
     """head token 分数矩阵"""
-    scoreMatrix=np.zeros([len(example[1]),len(example[1])*len(relation2id)])
-    joint_ids=[]
-    for index in range(len(example[1])):
+    scoreMatrix=np.zeros([max_seq_len,max_seq_len*len(relation2id)])
+    for index in range(min(max_seq_len,len(example[0]))):
         relations=example[3][index]
         head=example[4][index]
         label_ids=[]
@@ -106,37 +104,34 @@ def get_scoreMatrix_head(example,relation2id):
             scoreMatrix[index][col]=1
     return scoreMatrix
 
-def mapping_and_padding(data,char2id,label2id,relation2id,max_seq_len=300):
+def mapping_to_ids(examples,char2id,label2id,relation2id,max_seq_len=300):
+    """将文字和标签序列转换为ids序列，填充序列到等长"""
     doc_ids=[]
-    doc_length=[]
     j=0  #仅在本机上设置，服务器上使用全部数据
-    for example in data:
+    for example in examples:
         """将序列转换为id序列和获得head score 矩阵"""
+        token="".join(example[1])
         token_ids=mapping_token_to_id(example[1],char2id)
         BIO_ids=mapping_label_to_id(example[2],label2id)
-        try:
-            scoreMatrix=get_scoreMatrix_head(example,relation2id)
-        except IndexError:
-            print(example)
-            exit()
+        scoreMatrix=get_scoreMatrix_head(example,relation2id,max_seq_len=max_seq_len)
 
-        """序列填充，分数矩阵不填充"""
-        doc_length.append(len(token_ids)) #实际长度
-        # if len(token_ids)<max_seq_len:
-        #     token_ids.extend([char2id["<PAD>"]]*(max_seq_len-len(token_ids)))
-        #     BIO_ids.extend([0]*(max_seq_len-len(BIO_ids)))
-
-        doc_ids.append((token_ids,BIO_ids,scoreMatrix))
-
+        doc_ids.append((token,token_ids,BIO_ids,scoreMatrix)) #[(文字序列，ids序列，标签ids序列，分数矩阵)]
         j += 1
-        if j>=5000:
+        if j>=100:
             break
+    return doc_ids
 
-    return doc_ids,doc_length
+def padding(x,max_seq_len=300):
+    if len(x)<max_seq_len:
+        x.extend([0]*(max_seq_len-len(x)))
+    else:
+        x=x[:max_seq_len]
+    return x
 
-def generator(data,data_length,params,config,train=False,shuffle=True):
+def generator(data,params,config,train=False,shuffle=True):
     #加载图模型中的需要喂数据的参数
     is_train=params["is_train"]
+    token=params["token"]
     token_ids=params["token_ids"]
     ner_ids=params["ner_ids"]
     scoreMatrix=params["scoreMatrix"]
@@ -149,30 +144,32 @@ def generator(data,data_length,params,config,train=False,shuffle=True):
 
     #打乱数据
     if shuffle:
-        data,_,data_length,_=train_test_split(data,data_length,test_size=0,random_state=20190404)
+        data,_,_,_=train_test_split(data,range(len(data)),test_size=0,random_state=20190404)
 
     batch_num=len(data)//config.batch_size
-
     all_batch=[]
+    batch_token=[]
     batch_token_ids=[]
     batch_ner_ids=[]
     batch_score_matrix=[]
     batch_data_length=[]
     for i in range(len(data)):
         if i%config.batch_size==0 and i>0:
-            all_batch.append([batch_token_ids,batch_ner_ids,batch_score_matrix,batch_data_length])
+            all_batch.append([batch_token,batch_token_ids,batch_ner_ids,batch_score_matrix,batch_data_length])
+            batch_token=[]
             batch_token_ids = []
             batch_ner_ids = []
             batch_score_matrix = []
             batch_data_length = []
-        batch_token_ids.append(data[i][0])
-        batch_ner_ids.append(data[i][1])
-        batch_score_matrix.append(data[i][2])
-        batch_data_length.append(data_length[i])
+        batch_token.append(data[i][0])
+        batch_token_ids.append(padding(data[i][1]))
+        batch_ner_ids.append(padding(data[i][2]))
+        batch_score_matrix.append(data[i][3])
+        batch_data_length.append(len(data[i][0]))
 
     if len(data)%config.batch_size!=0:
         batch_num+=1
-        all_batch.append([batch_token_ids,batch_ner_ids,batch_score_matrix,batch_data_length])
+        all_batch.append([batch_token,batch_token_ids,batch_ner_ids,batch_score_matrix,batch_data_length])
 
     #调整dropout参数
     if train:
@@ -188,98 +185,18 @@ def generator(data,data_length,params,config,train=False,shuffle=True):
         lstm_output_keep = 1.0
         fcl_ner_keep = 1.0
         fcl_rel_keep = 1.0
-
-
     for iter in range(batch_num):
-        # print(np.asarray(all_batch[iter][0])[0])
-        # print(np.asarray(all_batch[iter][1])[0])
-        # print(np.asarray(all_batch[iter][2]).shape)
-        # print(np.asarray(all_batch[iter][3])[0])
-
         yield {is_train:train,
-               token_ids:np.asarray(all_batch[iter][0]),
-               ner_ids:np.asarray(all_batch[iter][1]),
-               scoreMatrix:np.asarray(all_batch[iter][2]),
-               seq_len:np.asarray(all_batch[iter][3]),
+               token:all_batch[iter][0],
+               token_ids:np.asarray(all_batch[iter][1]),
+               ner_ids:np.asarray(all_batch[iter][2]),
+               scoreMatrix:np.asarray(all_batch[iter][3]),
+               seq_len:np.asarray(all_batch[iter][4]),
                dropout_embedding_keep:embedding_keep,
                dropout_lstm_keep:lstm_keep,
                dropout_lstm_output_keep:lstm_output_keep,
                dropout_fcl_rel_keep:fcl_rel_keep,
                dropout_fcl_ner_keep:fcl_ner_keep}
-
-def train(train_data,train_data_length,config,operations,iter,sess,id2char,id2label):
-    #创建评估
-    # evaluator=eval.chunkEvaluator(config, ner_chunk_eval="boundaries_type",rel_chunk_eval="boundaries_type")
-    loss,count,p,r,f=0,0,0,0,0
-    start=time.time()
-    for x_train in generator(train_data,train_data_length,operations.params,config,train=True):
-
-        _,batch_loss,predNER,actualNER,predRel,actualRel,relScore,_=sess.run([operations.train_op,
-                                                                              operations.loss,
-                                                                              operations.predNER,
-                                                                              operations.actualNER,
-                                                                              operations.predRel,
-                                                                              operations.actualRel,
-                                                                              operations.relScore,
-                                                                              operations.params],feed_dict=x_train)
-        # evaluator.add(predNER,actualNER,predRel,actualRel)
-        batch_p,batch_r,batch_f=evaluate(x_train[operations.params["token_ids"]][0],actualNER[0],predNER[0],id2char=id2char,id2label=id2label)
-        p+=batch_p; r+=batch_r; f+=batch_f; loss+=batch_loss
-        count+=1
-        if count%50==0:
-            print("count={}， batch_loss={:.4f},  batch_p={:.4f},  batch_r={:.4f},  batch_f={:.4f}".format(count,batch_loss,batch_p,batch_r,batch_f))
-
-    print("******iter %d******"%iter)
-    print("-------Train-------")
-    print("loss:%.4f"%loss/count)
-    # evaluator.printInfo()
-    end=time.time()
-    print("Current step spend time:%.2f"%(end-start))
-    print()
-
-
-
-def get_entity(x,y,id2label=None,id2char=None):
-    """获得实体/类型"""
-    entity=[]
-    entities=[]
-    type=""
-    for ids in range(len(y)):
-        label=id2label[y[ids]]
-        if label!="O" and label.split("-")[0]=="B":
-            if len(entity)>0:
-                name = "".join(entity)
-                entities.append(name+"/"+type)
-                entity=[]
-                type=""
-            type=label.split("-")[1]
-            entity.append(id2char[x[ids]])
-        elif label!="O" and label.split("-")[0]=="I" and len(entity)>0:
-            entity.append(id2char[x[ids]])
-        else:
-            name="".join(entity)
-            if name!="":
-                entities.append(name+"/"+type)
-            entity=[]
-            type=""
-
-    return entities
-
-def evaluate(x,y_true,y_pred,id2char=None,id2label=None):
-    res_true=get_entity(x,y_true,id2char=id2char,id2label=id2label)
-    res_pred=get_entity(x,y_pred,id2char=id2char,id2label=id2label)
-    cross_val=[name for name in res_pred if name in res_true]
-    if len(cross_val)!=0:
-        p=len(cross_val)/len(res_pred)
-        r=len(cross_val)/len(res_true)
-        f=2*p*r/(p+r)
-    else:
-        p,r,f=0.,0.,0.
-
-    return p,r,f
-
-
-
 
 
 
