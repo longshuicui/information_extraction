@@ -3,7 +3,7 @@ information_extraction
 
 convert_data.py  转换训练和验证数据集  
 convert_test.py  转换测试集数据
-eval,py   比赛中用的评估脚本
+eval.py   比赛中用的评估脚本
 model.py   tensorflow下的模型
 process.py  模型训练验证测试中用函数
 utils.py    数据处理用的函数
