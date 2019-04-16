@@ -4,6 +4,7 @@ import time
 import numpy as np
 import pandas as pd
 from tqdm import tqdm
+from sklearn.metrics import precision_score,recall_score,f1_score
 from utils import *
 
 def get_spo_list(tokens,rel_score_matrix,ner_ids,id2relation=None,id2label=None):
@@ -33,6 +34,7 @@ def get_spo_list(tokens,rel_score_matrix,ner_ids,id2relation=None,id2label=None)
             if id2label[ner_ids[sub_end]]=="O":
                 continue
             subject_type = id2label[ner_ids[sub_end]].split("-")[1]  #主语的类型
+            subject=""
             for i in range(sub_end,-1,-1):
                 if id2label[ner_ids[i]]=="B-"+subject_type:
                     subject=tokens[i:sub_end+1]
@@ -41,10 +43,13 @@ def get_spo_list(tokens,rel_score_matrix,ner_ids,id2relation=None,id2label=None)
             if id2label[ner_ids[obj_end]]=="O":
                 continue
             object_type=id2label[ner_ids[obj_end]].split("-")[1]  #宾语类型
+            object=""
             for i in range(obj_end,-1,-1):
                 if id2label[ner_ids[i]]=="B-"+object_type:
                     object=tokens[i:obj_end+1]
                     break
+            if subject=="" or object=="":
+                continue
             spo={"object_type":object_type,"predicate":predicate,"object":object,"subject_type":subject_type,"subject":subject}
             spo_list.append(spo)
 
@@ -75,6 +80,7 @@ def train(train_data,config,operations,iter,sess,id2label=None,id2relation=None)
 def dev(dev_data,config,operations,sess,id2relation=None,id2label=None):
     print("-------Evaluate----------")
     y_true,y_pred=[],[]
+    a=1e-10
     for x_dev in generator(dev_data,operations.params,config,train=False):
         batch_loss, predNER, actualNER, predRel, actualRel,tokens = sess.run([operations.loss,
                                                                               operations.predNER,
@@ -87,13 +93,13 @@ def dev(dev_data,config,operations,sess,id2relation=None,id2label=None):
         for i in range(len(tokens)):
             pred_spo_list = get_spo_list(tokens[i], predRel[i], predNER[i], id2label=id2label, id2relation=id2relation)
             true_spo_list = get_spo_list(tokens[i], actualRel[i],actualNER[i],id2label=id2label,id2relation=id2relation)
+            if pred_spo_list==true_spo_list:
+                a+=1
             y_true.append(true_spo_list)
             y_pred.append(pred_spo_list)
 
-    cross_val=[i for i in y_pred if i in y_true]
-    cross=max(float(len(cross_val)),1e-10)
-    p=cross/len(y_pred)
-    r=cross/len(y_true)
+    p=a/len(y_pred)
+    r=a/len(y_true)
     f=2*p*r/(p+r)
 
     print("Current dev data,precision={:.4f},recall={:.4f},f1={:.4f}".format(p,r,f))

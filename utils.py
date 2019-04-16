@@ -3,6 +3,7 @@ import pickle
 import time
 import numpy as np
 import pandas as pd
+from tqdm import tqdm
 from sklearn.model_selection import train_test_split
 
 def load_dict():
@@ -108,7 +109,7 @@ def mapping_to_ids(examples,char2id,label2id,relation2id,max_seq_len=300):
     """将文字和标签序列转换为ids序列，填充序列到等长"""
     doc_ids=[]
     j=0  #仅在本机上设置，服务器上使用全部数据
-    for example in examples:
+    for example in tqdm(examples):
         """将序列转换为id序列和获得head score 矩阵"""
         token="".join(example[1])
         token_ids=mapping_token_to_id(example[1],char2id)
@@ -162,10 +163,10 @@ def generator(data,params,config,train=False,shuffle=True):
             batch_score_matrix = []
             batch_data_length = []
         batch_token.append(data[i][0])
-        batch_token_ids.append(padding(data[i][1]))
-        batch_ner_ids.append(padding(data[i][2]))
+        batch_token_ids.append(padding(data[i][1],max_seq_len=config.max_seq_len))
+        batch_ner_ids.append(padding(data[i][2],max_seq_len=config.max_seq_len))
         batch_score_matrix.append(data[i][3])
-        batch_data_length.append(len(data[i][0]))
+        batch_data_length.append(min(len(data[i][0]),config.max_seq_len))
 
     if len(data)%config.batch_size!=0:
         batch_num+=1
@@ -188,10 +189,10 @@ def generator(data,params,config,train=False,shuffle=True):
     for iter in range(batch_num):
         yield {is_train:train,
                token:all_batch[iter][0],
-               token_ids:np.asarray(all_batch[iter][1]),
-               ner_ids:np.asarray(all_batch[iter][2]),
-               scoreMatrix:np.asarray(all_batch[iter][3]),
-               seq_len:np.asarray(all_batch[iter][4]),
+               token_ids:all_batch[iter][1],
+               ner_ids:all_batch[iter][2],
+               scoreMatrix:all_batch[iter][3],
+               seq_len:all_batch[iter][4],
                dropout_embedding_keep:embedding_keep,
                dropout_lstm_keep:lstm_keep,
                dropout_lstm_output_keep:lstm_output_keep,

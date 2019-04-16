@@ -28,7 +28,7 @@ class Model(object):
         #mask操作
         mask=tf.sequence_mask(seq_len,maxlen=self.config.max_seq_len,dtype=tf.float32,name="mask")
         mask=tf.expand_dims(mask,-1)
-        input_rnn=input_rnn*mask
+        input_rnn=tf.cast(input_rnn*mask,dtype=tf.float32)
 
         lossNER,lossRel,predNER,predRel,relScore=self._compute_loss(input_rnn,
                                                                     seq_len=seq_len,
@@ -39,7 +39,8 @@ class Model(object):
                                                                     dropout_lstm_keep=dropout_lstm_keep,
                                                                     dropout_lstm_output_keep=dropout_lstm_output_keep,
                                                                     dropout_fcl_ner_keep=dropout_fcl_ner_keep,
-                                                                    dropout_fcl_rel_keep=dropout_fcl_rel_keep)
+                                                                    dropout_fcl_rel_keep=dropout_fcl_rel_keep,
+                                                                    mask=mask)
 
         loss_total=lossRel+lossNER  #整体损失
 
@@ -62,29 +63,33 @@ class Model(object):
         return loss_total,token,ner_ids,predNER, rel_true,predRel,relScore,params
 
     def _compute_loss(self,input_rnn,seq_len,ner_ids,scoreMatrix,is_train,dropout_embedding_keep,dropout_lstm_keep,
-                      dropout_lstm_output_keep,dropout_fcl_ner_keep,dropout_fcl_rel_keep,reuse=False):
+                      dropout_lstm_output_keep,dropout_fcl_ner_keep,dropout_fcl_rel_keep,mask,reuse=False):
         """计算损失"""
         with tf.variable_scope("loss_conputation",reuse=reuse):
             if self.config.use_dropout:
                 input_rnn=tf.nn.dropout(input_rnn,keep_prob=dropout_embedding_keep)
 
             #BiLSTM底层编码
-            for i in range(self.config.num_lstm_layers):
-                if self.config.use_dropout and i>0:
-                    input_rnn=tf.nn.dropout(input_rnn,keep_prob=dropout_lstm_keep)
-                lstm_fw_cell=tf.nn.rnn_cell.LSTMCell(self.config.hidden_size_lstm)
-                lstm_bw_cell=tf.nn.rnn_cell.LSTMCell(self.config.hidden_size_lstm)
+            # for i in range(self.config.num_lstm_layers):
+            #     if self.config.use_dropout and i>0:
+            #         input_rnn=tf.nn.dropout(input_rnn,keep_prob=dropout_lstm_keep)
+            #     lstm_fw_cell=tf.nn.rnn_cell.LSTMCell(self.config.hidden_size_lstm)
+            #     lstm_bw_cell=tf.nn.rnn_cell.LSTMCell(self.config.hidden_size_lstm)
+            #
+            #     outputs,states=tf.nn.bidirectional_dynamic_rnn(lstm_fw_cell,
+            #                                                    lstm_bw_cell,
+            #                                                    input_rnn,
+            #                                                    sequence_length=seq_len,
+            #                                                    dtype=tf.float32,
+            #                                                    scope="BiLSTM"+str(i))
+            #     input_rnn = tf.concat(outputs, axis=-1)
+            #     lstm_output = input_rnn
 
-                outputs,states=tf.nn.bidirectional_dynamic_rnn(lstm_fw_cell,
-                                                               lstm_bw_cell,
-                                                               input_rnn,
-                                                               sequence_length=seq_len,
-                                                               dtype=tf.float32,
-                                                               scope="BiLSTM"+str(i))
-                input_rnn=tf.concat(outputs,axis=-1)
-                lstm_output=input_rnn
+            input_rnn=tf.keras.layers.CuDNNLSTM(units=self.config.hidden_size_lstm,return_sequences=True)(inputs=input_rnn)
+            input_rnn=tf.keras.layers.CuDNNLSTM(units=self.config.hidden_size_lstm,return_sequences=True)(inputs=input_rnn)
+            lstm_output=input_rnn
 
-            lstm_output = self._attention(lstm_output)
+            lstm_output = self._attention(lstm_output,mask)
             if self.config.use_dropout:
                 lstm_output=tf.nn.dropout(lstm_output,keep_prob=dropout_lstm_output_keep)
 
@@ -102,7 +107,7 @@ class Model(object):
             if self.config.label_embedding_size>0:
                 labels=tf.cond(is_train,lambda:ner_ids,lambda:predNERS)
                 label_matrix=tf.get_variable(name="label_embedding",shape=[self.config.num_ner_classes,
-                                                                           self.label_embedding_size],dtype=tf.float32)
+                                                                           self.config.label_embedding_size],dtype=tf.float32)
                 label_embedding=tf.nn.embedding_lookup(label_matrix,labels)
                 rel_input=tf.concat([lstm_output,label_embedding],axis=2)
             else:
@@ -122,7 +127,7 @@ class Model(object):
     def _get_ner_score(self,lstm_output,n_types,dropout_keep_in_prob=1):
         """计算NER发射分数"""
         #两层线性全连接层
-        w_1=tf.get_variable("w_1",shape=[self.config.hidden_size_lstm*2,self.config.hidden_size_n1],dtype=tf.float32)
+        w_1=tf.get_variable("w_1",shape=[self.config.hidden_size_lstm,self.config.hidden_size_n1],dtype=tf.float32)
         b_1 = tf.get_variable("b_1", shape=[self.config.hidden_size_n1], dtype=tf.float32)
         w_2=tf.get_variable("w_2",shape=[self.config.hidden_size_n1,n_types],dtype=tf.float32)
         b_2=tf.get_variable("b_2",shape=[n_types],dtype=tf.float32)
@@ -140,8 +145,8 @@ class Model(object):
     def _get_head_selection_score(self,rel_input,dropout_keep_in_prob=1):
         #两两实体进行配对求分数
         v=tf.get_variable("v",shape=[self.config.hidden_size_n1,self.config.num_rel_classes],dtype=tf.float32)
-        w_left=tf.get_variable("w_left",shape=[self.config.hidden_size_lstm*2+self.config.label_embedding_size,self.config.hidden_size_n1],dtype=tf.float32)
-        w_right=tf.get_variable("w_right",shape=[self.config.hidden_size_lstm*2+self.config.label_embedding_size,self.config.hidden_size_n1],dtype=tf.float32)
+        w_left=tf.get_variable("w_left",shape=[self.config.hidden_size_lstm+self.config.label_embedding_size,self.config.hidden_size_n1],dtype=tf.float32)
+        w_right=tf.get_variable("w_right",shape=[self.config.hidden_size_lstm+self.config.label_embedding_size,self.config.hidden_size_n1],dtype=tf.float32)
         b=tf.get_variable("b",shape=[self.config.hidden_size_n1],dtype=tf.float32)
 
         #矩阵运算求方程 vf(ux+wy+b)
@@ -190,16 +195,16 @@ class Model(object):
 
         return train_op
 
-    def _attention(self,H):
+    def _attention(self,H,mask):
         """attention"""
         att_w=tf.get_variable(name="att_w",shape=[self.config.max_seq_len,self.config.max_seq_len],dtype=tf.float32)
         H=tf.transpose(H,[0,2,1]) #[batch_size,embedding_size,seq_len]
         weight_att=tf.nn.softmax(att_w)
         H=tf.einsum("aij,jk->aik",H,weight_att)
         H=tf.transpose(H,[0,2,1])  #[batch_size,seq_len.embedding_size]
+        H=H*mask
 
         return H
-
 
 
 class Operations():

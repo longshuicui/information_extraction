@@ -6,14 +6,16 @@ from tqdm import tqdm
 from model import Model,Operations
 from utils import *
 from process import *
+os.environ["TF_CPP_MIN_LOG_LEVEL"] = "2"
+os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 
 class Config:
     def __init__(self):
         #adjustment parameter
         self.max_seq_len=300
-        self.batch_size=32
-        self.learning_rate=0.001
-        self.epoches=1
+        self.batch_size=64
+        self.learning_rate=0.0001
+        self.epoches=30
         self.gradientClipping=False
 
         #network parameter
@@ -36,8 +38,7 @@ class Config:
 
 
 if __name__ == '__main__':
-    os.environ["TF_CPP_MIN_LOG_LEVEL"] = "2"
-    os.environ["CUDA_VISIBLE_DEVICES"] = "0"
+
     tf.logging.set_verbosity(tf.logging.INFO)
 
     config=Config()
@@ -56,9 +57,10 @@ if __name__ == '__main__':
     with open("../data/train.pkl","rb") as inp_train,open("../data/dev.pkl","rb") as inp_dev:
         train_examples=pickle.load(inp_train)
         dev_examples=pickle.load(inp_dev)
+    tf.logging.info("数据加载完成，开始处理-->")
 
-    train_doc_ids=mapping_to_ids(train_examples,char2id,label2id,relation2id)
-    dev_doc_ids=mapping_to_ids(dev_examples,char2id,label2id,relation2id)
+    train_doc_ids=mapping_to_ids(train_examples,char2id,label2id,relation2id,max_seq_len=config.max_seq_len)
+    dev_doc_ids=mapping_to_ids(dev_examples,char2id,label2id,relation2id,max_seq_len=config.max_seq_len)
 
     tf.logging.info("训练集样本数量:%d" % len(train_doc_ids))
     tf.logging.info("验证集样本数量:%d" % len(dev_doc_ids))
@@ -67,9 +69,9 @@ if __name__ == '__main__':
     tf.logging.info("token_id：%s"%str(train_doc_ids[0][1]))
     tf.logging.info("ner_id：%s"%str(train_doc_ids[0][2]))
 
-    with tf.Session() as sess:
+    with tf.Session(config=tf.ConfigProto(allow_soft_placement=True)) as sess:
         model=Model(config,embed_matrix,sess)
-        #构建图模型
+        #构建Graph
         loss_total, token, ner_ids, predNER, rel_true, predRel, relScore, params=model.run()
         train_op=model._get_train_op(loss_total)
         operations=Operations(train_op,loss_total,params,token,predNER,ner_ids,predRel,rel_true,relScore)
