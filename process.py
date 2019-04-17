@@ -79,8 +79,9 @@ def train(train_data,config,operations,iter,sess,id2label=None,id2relation=None)
 
 def dev(dev_data,config,operations,sess,id2relation=None,id2label=None):
     print("-------Evaluate----------")
+    start=time.time()
     y_true,y_pred=[],[]
-    a=1e-10
+    A,B,C=1e10,1e10,1e10
     for x_dev in generator(dev_data,operations.params,config,train=False):
         batch_loss, predNER, actualNER, predRel, actualRel,tokens = sess.run([operations.loss,
                                                                               operations.predNER,
@@ -93,24 +94,24 @@ def dev(dev_data,config,operations,sess,id2relation=None,id2label=None):
         for i in range(len(tokens)):
             pred_spo_list = get_spo_list(tokens[i], predRel[i], predNER[i], id2label=id2label, id2relation=id2relation)
             true_spo_list = get_spo_list(tokens[i], actualRel[i],actualNER[i],id2label=id2label,id2relation=id2relation)
-            if pred_spo_list==true_spo_list:
-                a+=1
-            y_true.append(true_spo_list)
-            y_pred.append(pred_spo_list)
 
-    p=a/len(y_pred)
-    r=a/len(y_true)
-    f=2*p*r/(p+r)
-
-    print("Current dev data,precision={:.4f},recall={:.4f},f1={:.4f}".format(p,r,f))
+            cross=[i for i in pred_spo_list if i in true_spo_list]
+            A+=len(cross)
+            B+=len(pred_spo_list)
+            C+=len(true_spo_list)
+    p=A/B
+    r=A/C
+    f=2*A/(B+C)
+    end=time.time()
+    print("Current dev:{:.2f},precision={:.4f},recall={:.4f},f1={:.4f}".format(end-start,p,r,f))
     print()
 
 
 def test(test_data,config,operations,sess,params,id2relation=None,id2label=None,char2id=None):
     feed_dict={params["is_train"]:False,
                params["token"]:[test_data],
-               params["token_ids"]:[padding(mapping_token_to_id(test_data,char2id=char2id))],
-               params["seq_len"]:[len(test_data)],
+               params["token_ids"]:[padding(mapping_token_to_id(test_data,char2id=char2id),max_seq_len=config.max_seq_len)],
+               params["seq_len"]:[min(config.max_seq_len,len(test_data))],
                params["dropout_embedding_keep"]:1,
                params["dropout_lstm_keep"]:1,
                params["dropout_lstm_output_keep"]:1,

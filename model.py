@@ -1,6 +1,7 @@
 import tensorflow as tf
 import numpy as np
 import pandas as pd
+from tensorflow.keras.layers import *
 
 class Model(object):
     def __init__(self,config,embed_matrix,sess):
@@ -85,8 +86,8 @@ class Model(object):
             #     input_rnn = tf.concat(outputs, axis=-1)
             #     lstm_output = input_rnn
 
-            input_rnn=tf.keras.layers.CuDNNLSTM(units=self.config.hidden_size_lstm,return_sequences=True)(inputs=input_rnn)
-            input_rnn=tf.keras.layers.CuDNNLSTM(units=self.config.hidden_size_lstm,return_sequences=True)(inputs=input_rnn)
+            input_rnn=tf.keras.layers.Bidirectional(CuDNNLSTM(units=self.config.hidden_size_lstm,return_sequences=True))(inputs=input_rnn)
+            input_rnn=tf.keras.layers.Bidirectional(CuDNNLSTM(units=self.config.hidden_size_lstm,return_sequences=True))(inputs=input_rnn)
             lstm_output=input_rnn
 
             lstm_output = self._attention(lstm_output,mask)
@@ -127,7 +128,7 @@ class Model(object):
     def _get_ner_score(self,lstm_output,n_types,dropout_keep_in_prob=1):
         """计算NER发射分数"""
         #两层线性全连接层
-        w_1=tf.get_variable("w_1",shape=[self.config.hidden_size_lstm,self.config.hidden_size_n1],dtype=tf.float32)
+        w_1=tf.get_variable("w_1",shape=[self.config.hidden_size_lstm*2,self.config.hidden_size_n1],dtype=tf.float32)
         b_1 = tf.get_variable("b_1", shape=[self.config.hidden_size_n1], dtype=tf.float32)
         w_2=tf.get_variable("w_2",shape=[self.config.hidden_size_n1,n_types],dtype=tf.float32)
         b_2=tf.get_variable("b_2",shape=[n_types],dtype=tf.float32)
@@ -145,8 +146,8 @@ class Model(object):
     def _get_head_selection_score(self,rel_input,dropout_keep_in_prob=1):
         #两两实体进行配对求分数
         v=tf.get_variable("v",shape=[self.config.hidden_size_n1,self.config.num_rel_classes],dtype=tf.float32)
-        w_left=tf.get_variable("w_left",shape=[self.config.hidden_size_lstm+self.config.label_embedding_size,self.config.hidden_size_n1],dtype=tf.float32)
-        w_right=tf.get_variable("w_right",shape=[self.config.hidden_size_lstm+self.config.label_embedding_size,self.config.hidden_size_n1],dtype=tf.float32)
+        w_left=tf.get_variable("w_left",shape=[self.config.hidden_size_lstm*2+self.config.label_embedding_size,self.config.hidden_size_n1],dtype=tf.float32)
+        w_right=tf.get_variable("w_right",shape=[self.config.hidden_size_lstm*2+self.config.label_embedding_size,self.config.hidden_size_n1],dtype=tf.float32)
         b=tf.get_variable("b",shape=[self.config.hidden_size_n1],dtype=tf.float32)
 
         #矩阵运算求方程 vf(ux+wy+b)

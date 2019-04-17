@@ -12,8 +12,8 @@ os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 class Config:
     def __init__(self):
         #adjustment parameter
-        self.max_seq_len=300
-        self.batch_size=64
+        self.max_seq_len=128
+        self.batch_size=32
         self.learning_rate=0.0001
         self.epoches=30
         self.gradientClipping=False
@@ -89,7 +89,7 @@ if __name__ == '__main__':
                 print("模型已经保存，路径地址：",path)
 
         print("开始进行测试集输出.......")
-
+        # saver.restore(sess,"./output/")
         outp=open("./res.json","w",encoding="utf8")
         test_datas=json.load(open("../data/test_data_me.json",encoding="utf8"))
         for data in tqdm(test_datas):
